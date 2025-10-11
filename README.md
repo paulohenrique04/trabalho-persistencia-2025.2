@@ -1,0 +1,1 @@
+Repositório inicial do trabalho da disciplina de desenvolvimento de software para persistência 2025.2
