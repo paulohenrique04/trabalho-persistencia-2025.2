@@ -1,11 +1,12 @@
-from fastapi import FastAPI, HTTPException,Query
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing  import  Optional, Dict, Any
+from typing import Optional, Dict, Any
 import pandas as pd
 import zipfile
 import io
 import hashlib
+from deltalake import DeltaTable
 from db.database import DeltaDatabase
 
 app = FastAPI(title="API de Filmes", version="1.0.0")
@@ -24,8 +25,8 @@ class FilmeCreate(BaseModel):
     classificacao: str
     orcamento: float
 
-    class FilmeUpdate(BaseModel):
-     nome: Optional[str] = None
+class FilmeUpdate(BaseModel):
+    nome: Optional[str] = None
     ano_lancamento: Optional[int] = None
     genero: Optional[str] = None
     diretor: Optional[str] = None
@@ -34,30 +35,32 @@ class FilmeCreate(BaseModel):
     classificacao: Optional[str] = None
     orcamento: Optional[float] = None
 
-    class HashRequest(BaseModel):
-        dado: str
-        funcao_hash: str  # "md5", "sha1", "sha256"
-        class  PaginacaoRequest(BaseModel):
-          pagina: int 
-          tamanho_pagina: int 
-          # F1: Inserir entidade
+class HashRequest(BaseModel):
+    dado: str
+    funcao_hash: str  # "md5", "sha1", "sha256"
+
+class PaginacaoRequest(BaseModel):
+    pagina: int 
+    tamanho_pagina: int
+
+# F1: Inserir entidade
 @app.post("/filmes/", response_model=Dict[str, Any])
 async def criar_filme(filme: FilmeCreate):
     """F1: Inserir um novo filme no banco de dados"""
     try:
         filme_dict = filme.dict()
-        db.insert(filme_dict)
-        return {"mensagem": "Filme inserido com sucesso", "dados": filme_dict}
+        filme_id = db.insert(filme_dict)
+        return {"mensagem": "Filme inserido com sucesso", "id": filme_id, "dados": filme_dict}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao inserir filme: {str(e)}")
         
-        # F2: Listar com paginação
+# F2: Listar com paginação
 @app.post("/filmes/paginacao/")
 async def listar_filmes_paginados(paginacao: PaginacaoRequest):
     """F2: Retornar filmes com paginação"""
     try:
         # Carrega todos os dados
-        dt = DeltaTable(db.path)
+        dt = DeltaTable(str(db.path))
         df = dt.to_pandas()
         
         # Calcula índices para paginação
@@ -76,14 +79,14 @@ async def listar_filmes_paginados(paginacao: PaginacaoRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao listar filmes: {str(e)}")
         
-       # F3: CRUD Completo
+# F3: CRUD Completo
 
 # GET - Listar todos os filmes
 @app.get("/filmes/")
 async def listar_filmes():
     """Listar todos os filmes"""
     try:
-        dt = DeltaTable(db.path)
+        dt = DeltaTable(str(db.path))
         df = dt.to_pandas()
         return {"filmes": df.to_dict('records')}
     except Exception as e:
@@ -94,14 +97,10 @@ async def listar_filmes():
 async def buscar_filme(filme_id: int):
     """Buscar filme por ID"""
     try:
-        dt = DeltaTable(db.path)
-        df = dt.to_pandas()
-        filme = df[df["id"] == filme_id]
-        
-        if filme.empty:
+        filme = db.get_by_id(filme_id)
+        if filme is None:
             raise HTTPException(status_code=404, detail="Filme não encontrado")
-        
-        return filme.iloc[0].to_dict()
+        return filme
     except HTTPException:
         raise
     except Exception as e:
@@ -152,7 +151,7 @@ async def contar_filmes():
 async def exportar_filmes():
     """F5: Exportar todos os filmes como CSV compactado via streaming"""
     try:
-        dt = DeltaTable(db.path)
+        dt = DeltaTable(str(db.path))
         df = dt.to_pandas()
         
         # Cria um buffer em memória para o ZIP
