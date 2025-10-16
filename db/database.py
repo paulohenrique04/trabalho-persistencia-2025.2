@@ -1,6 +1,7 @@
 from deltalake import DeltaTable, write_deltalake
 import pandas as pd
 import os
+from pathlib import Path
 
 class DeltaDatabase:
     """
@@ -8,93 +9,49 @@ class DeltaDatabase:
     """
 
     def __init__(self, table_path: str):
-        """
-        Inicializa o banco de dados
+        self.path = Path(table_path)
+        self.seq_file = self.path / ".seq"
+        self.path.mkdir(parents=True, exist_ok=True)
+        if not self.seq_file.exists():
+            self.write_seq_file("0")
 
-        Args:
-            table_path (str): Caminho para o diretório onde os dados serão armazenados
-        """
-
-        # Primeiro guardamos o caminho da tabela que queremos armazenar os dados, por exemplo: data/filmes
-        self.path = table_path
-        self.table_path = table_path
-        # Como é um requisito usar o arquivo .seq para os IDs da aplicação, faremos com que ele tenha o mesmo nome
-        # do diretório da tabela, mas com a extensão .seq. Por exemplo: data/filmes.seq
-        self.seq_path = f"{self.path}.seq"
-
-        # Verificamos se o diretório já existe, se não existir, criamos o diretório e inicializamos a tabela.
-        if not os.path.exists(table_path):
-            os.makedirs(table_path, exist_ok=True)
-            # Criar um DataFrame vazio com todas as colunas que vamos usar
-            df = pd.DataFrame(columns=[
-                "id", 
-                "nome", 
-                "ano_lancamento", 
-                "genero", 
-                "diretor", 
-                "roteirista", 
-                "duracao", 
-                "classificacao", 
-                "orcamento"
-            ]).astype({
-                "id": "int64",
-                "nome": "string",
-                "ano_lancamento": "int64", 
-                "genero": "string",
-                "diretor": "string",
-                "roteirista": "string",
-                "duracao": "int64",
-                "classificacao": "string",
-                "orcamento": "float64"
-            })
-            write_deltalake(table_path, df)
-        
-        # verificamos se ainda não existe um arquivo .seq para lidar com a tabela que 
-        # queremos adicionar, se não existir, criamos o arquivo e iniciamos com o valor 0
-        if not os.path.exists(self.seq_path):
-            with open(self.seq_path, "w") as file:
-                file.write("0")
+    def read_seq_file(self) -> int:
+        return int(self.seq_file.read_text().strip() or 0)
+    
+    # Sobrecreve o arquivo .seq com o novo valor
+    def write_seq_file(self, value: int):
+        self.seq_file.write_text(str(int(value)))
     
     def get_next_id(self) -> int:
-        with open(self.seq_path, "r") as file:
-            current_id = int(file.read().strip())
-        next_id = current_id + 1
-
-        with open(self.seq_path, "w") as file:
-            file.write(str(next_id))
-
-        return next_id
+        current_id = self.read_seq_file() + 1
+        self.write_seq_file(current_id)
+        return current_id
     
     def insert(self, data: dict):
         current_id = self.get_next_id()
         data["id"] = current_id
+        df = pd.DataFrame([data])
+
+        if not any(self.path.iterdir()):
+            write_deltalake(str(self.path), df)
+        else:
+            write_deltalake(str(self.path), df, mode="append")
         
-        # Garantir que todas as colunas estejam presentes no DataFrame
-        # Criar um dicionário com todas as colunas esperadas
-        default_data = {
-            "id": current_id,
-            "nome": "",
-            "ano_lancamento": 0,
-            "genero": "",
-            "diretor": "",
-            "roteirista": "",
-            "duracao": 0,
-            "classificacao": "",
-            "orcamento": 0.0
-        }
-        
-        # Atualizar com os dados fornecidos
-        default_data.update(data)
-        
-        df = pd.DataFrame([default_data])
-        write_deltalake(self.path, df, mode="append")
+        return current_id
+    
+    def get_by_id(self, record_id: int) -> dict | None:
+        dt = DeltaTable(self.path)
+        df = dt.to_pandas()
+        record = df[df["id"] == record_id]
+        if not record.empty:
+            return record.iloc[0].to_dict()
     
     def read(self, path: str):
         df = DeltaTable(path).to_pandas()
         print(df)
     
     def update(self, update_id: int, new_data: dict):
-        df = DeltaTable(self.table_path).to_pandas()
+        df = DeltaTable(self.path).to_pandas()
 
         if update_id in df["id"].values:
             for col, value in new_data.items():
@@ -102,25 +59,67 @@ class DeltaDatabase:
                     df.loc[df["id"] == update_id, col] = value
                 else:
                     raise ValueError(f"Coluna '{col}' não existe na tabela.")
-            write_deltalake(self.table_path, df, mode="overwrite")
+            write_deltalake(self.path, df, mode="overwrite")
         else:
             raise ValueError(f"ID '{update_id}' não encontrado na tabela.")
     
     def delete(self, delete_id: int):
-        df = DeltaTable(self.table_path).to_pandas()
+        df = DeltaTable(self.path).to_pandas()
 
         if delete_id in df["id"].values:
             df = df[df["id"] != delete_id]
             df = df.reset_index(drop=True)
-            write_deltalake(self.table_path, df, mode="overwrite", schema_mode="overwrite")
-            return True
+            
+            if df.empty:
+                for file in self.path.iterdir():
+                    if file.is_file():
+                        os.remove(file)
+                print("Todos os registros foram deletados. Tabela removida.")
         else:
             raise ValueError(f"ID '{delete_id}' não encontrado na tabela.")
     
     def count(self) -> int:
-        dt = DeltaTable(self.path)
-        return len(dt.to_pandas())
+        if not any(self.path.iterdir()):
+            return 0
+        
+        try:
+            dt = DeltaTable(self.path)
+            return len(dt.to_pandas())
+        except Exception as e:
+            print(f"Erro ao contar registros: {e}")
+            return 0
     
     def vacuum(self):
-        # TODO
-        return
+        if not any(self.path.iterdir()):
+            print("Tabela não existe ou está vazia.")
+            return
+        
+        try:
+            dt = DeltaTable(self.path)
+            dt.vacuum(retention_hours=0)
+        except Exception as e:
+            print(f"Erro ao executar vacuum: {e}")
+
+if __name__ == "__main__":
+    db = DeltaDatabase("./data/usuarios")
+
+    # CREATE
+    user_id = db.insert({"nome": "Paulo", "idade": 25})
+    print(f"Usuário inserido com ID: {user_id}")
+
+    # READ
+    print("Usuário encontrado:", db.get_by_id(user_id))
+
+    # UPDATE
+    db.update(user_id, {"idade": 26})
+    print("Atualizado:", db.get_by_id(user_id))
+
+    # COUNT
+    print("Total de registros:", db.count())
+
+    # DELETE
+    db.delete(user_id)
+    print("Após deleção, total:", db.count())
+
+    # VACUUM
+    db.vacuum()
