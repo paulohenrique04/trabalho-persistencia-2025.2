@@ -1,5 +1,5 @@
 import random
-from database import DeltaDatabase
+from db.database import DeltaDatabase
 from faker import Faker
 
 def popular_banco_dados(quantidade=1000):
