@@ -1,0 +1,8 @@
+Paulo Henrique – 1ª Implementação de um Mini Banco de Dados:
+Criou o banco de dados utilizando Delta Lake, garantindo eficiência e escalabilidade na gestão dos dados.
+
+João Alves – 2ª Definição da Entidade:
+Definiu a entidade com pelo menos 5 atributos, conforme o domínio escolhido pela tripla no Trabalho Prático 0 (TP0).
+
+Abraão Levi – 3ª Criação da API Rest e Script de População de Dados:
+Desenvolveu uma API Rest para interação com o banco de dados e criou um script Python para popular o banco com pelo menos 1.000 itens da entidade escolhida.
