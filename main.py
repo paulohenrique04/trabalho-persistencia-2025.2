@@ -8,6 +8,7 @@ import io
 import hashlib
 from deltalake import DeltaTable
 from db.database import DeltaDatabase
+from filme import Filme
 
 app = FastAPI(title="API de Filmes", version="1.0.0")
 
@@ -16,24 +17,32 @@ db = DeltaDatabase("data/filmes")
 
 # Modelo Pydantic para validação dos dados de filme
 class FilmeCreate(BaseModel):
-    nome: str
-    ano_lancamento: int
-    genero: str
-    diretor: str
-    roteirista: str
-    duracao: int
-    classificacao: str
-    orcamento: float
+    titulo_brasil: str
+    titulo_original: Optional[str] = None
+    ano: int
+    direcao: str
+    elenco: Optional[str] = None
+    categoria: str
+    tempo_minutos: int
+    nacionalidade: str
+    idioma: Optional[str] = None
+    resumo: Optional[str] = None
+    quando_cadastrou: Optional[str] = None
+    quem_cadastrou: Optional[str] = None
 
 class FilmeUpdate(BaseModel):
-    nome: Optional[str] = None
-    ano_lancamento: Optional[int] = None
-    genero: Optional[str] = None
-    diretor: Optional[str] = None
-    roteirista: Optional[str] = None
-    duracao: Optional[int] = None
-    classificacao: Optional[str] = None
-    orcamento: Optional[float] = None
+    titulo_brasil: Optional[str] = None
+    titulo_original: Optional[str] = None
+    ano: Optional[int] = None
+    direcao: Optional[str] = None
+    elenco: Optional[str] = None
+    categoria: Optional[str] = None
+    tempo_minutos: Optional[int] = None
+    nacionalidade: Optional[str] = None
+    idioma: Optional[str] = None
+    resumo: Optional[str] = None
+    quando_cadastrou: Optional[str] = None
+    quem_cadastrou: Optional[str] = None
 
 class HashRequest(BaseModel):
     dado: str
@@ -49,8 +58,18 @@ async def criar_filme(filme: FilmeCreate):
     """F1: Inserir um novo filme no banco de dados"""
     try:
         filme_dict = filme.dict()
-        filme_id = db.insert(filme_dict)
-        return {"mensagem": "Filme inserido com sucesso", "id": filme_id, "dados": filme_dict}
+        # Criar objeto Filme para validação
+        obj_filme = Filme.criar_apartir_dict(filme_dict)
+        # Validar dados
+        problemas = obj_filme.validar_informacoes()
+        if problemas:
+            raise HTTPException(status_code=400, detail=f"Dados inválidos: {'; '.join(problemas)}")
+        # Converter para dicionário para inserção
+        dados_para_inserir = obj_filme.converter_para_dicionario()
+        filme_id = db.insert(dados_para_inserir)
+        return {"mensagem": "Filme inserido com sucesso", "id": filme_id, "dados": dados_para_inserir}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao inserir filme: {str(e)}")
         
@@ -113,12 +132,30 @@ async def atualizar_filme(filme_id: int, filme: FilmeUpdate):
     try:
         # Filtra apenas os campos que foram fornecidos
         dados_atualizacao = {k: v for k, v in filme.dict().items() if v is not None}
-        
+
         if not dados_atualizacao:
             raise HTTPException(status_code=400, detail="Nenhum dado fornecido para atualização")
-        
-        db.update(filme_id, dados_atualizacao)
+
+        # Buscar filme existente para validação completa
+        filme_existente = db.get_by_id(filme_id)
+        if filme_existente is None:
+            raise HTTPException(status_code=404, detail="Filme não encontrado")
+
+        # Combinar dados existentes com atualizações
+        dados_completos = {**filme_existente, **dados_atualizacao}
+
+        # Criar objeto Filme para validação
+        obj_filme = Filme.criar_apartir_dict(dados_completos)
+        problemas = obj_filme.validar_informacoes()
+        if problemas:
+            raise HTTPException(status_code=400, detail=f"Dados inválidos: {'; '.join(problemas)}")
+
+        # Converter para dicionário para atualização
+        dados_para_atualizar = obj_filme.converter_para_dicionario()
+        db.update(filme_id, dados_para_atualizar)
         return {"mensagem": f"Filme {filme_id} atualizado com sucesso"}
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
